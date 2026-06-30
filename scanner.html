@@ -1,1 +1,199 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live QR Scanner — Sistem Sekolah</title>
+  <!-- Load Html5Qrcode library from CDN -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: #121212;
+      color: #ffffff;
+      margin: 0;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      box-sizing: border-box;
+    }
+    .header {
+      text-align: center;
+      margin-bottom: 16px;
+    }
+    h2 {
+      margin: 0 0 6px 0;
+      font-size: 22px;
+      color: #4285f4;
+    }
+    .desc {
+      font-size: 13px;
+      color: #aaaaaa;
+      max-width: 400px;
+      line-height: 1.4;
+    }
+    #reader {
+      width: 100%;
+      max-width: 400px;
+      border: 2px solid #333333;
+      border-radius: 12px;
+      overflow: hidden;
+      background: #1e1e1e;
+    }
+    /* Style local video output of library */
+    #reader video {
+      object-fit: cover !important;
+    }
+    #result-log {
+      width: 100%;
+      max-width: 400px;
+      margin-top: 16px;
+      background: #1e1e1e;
+      border-radius: 8px;
+      padding: 12px;
+      box-sizing: border-box;
+      max-height: 180px;
+      overflow-y: auto;
+      font-size: 13px;
+      border: 1px solid #333333;
+    }
+    .log-title {
+      font-weight: bold;
+      color: #888888;
+      margin-bottom: 8px;
+      border-bottom: 1px solid #333333;
+      padding-bottom: 4px;
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .log-item {
+      padding: 6px 8px;
+      border-bottom: 1px solid #2d2d2d;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .log-item:last-child {
+      border-bottom: none;
+    }
+    .log-success {
+      color: #34a853;
+      font-weight: bold;
+    }
+    .btn-close {
+      margin-top: 20px;
+      background: #ea4335;
+      color: white;
+      border: none;
+      padding: 14px;
+      border-radius: 8px;
+      font-size: 15px;
+      font-weight: bold;
+      cursor: pointer;
+      width: 100%;
+      max-width: 400px;
+      transition: background 0.2s;
+    }
+    .btn-close:hover {
+      background: #c93125;
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h2>📷 Kamera Live Scanner</h2>
+    <div class="desc">Arahkan kamera ke QR Code kartu siswa. Alat ini memindai secara otomatis tanpa henti.</div>
+  </div>
+  
+  <div id="reader"></div>
+  
+  <div id="result-log">
+    <div class="log-title">Riwayat Scan</div>
+    <div id="log-content" style="color: #666666; text-align: center; padding: 10px 0;">Belum ada kartu yang dipindai...</div>
+  </div>
+  
+  <button class="btn-close" onclick="window.close()">Tutup Scanner</button>
+
+  <script>
+    var lastScannedNis = "";
+    var lastScanTime = 0;
+    
+    // Synthesize beep sound locally (no asset files required)
+    var audioCtx = null;
+    function playBeep() {
+      try {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        var oscillator = audioCtx.createOscillator();
+        var gainNode = audioCtx.createGain();
+        oscillator.connect(gainNode);
+        gainNode.connect(audioCtx.destination);
+        oscillator.type = "sine";
+        oscillator.frequency.value = 800; 
+        gainNode.gain.setValueAtTime(0, audioCtx.currentTime);
+        gainNode.gain.linearRampToValueAtTime(0.3, audioCtx.currentTime + 0.05);
+        gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
+        oscillator.start(audioCtx.currentTime);
+        oscillator.stop(audioCtx.currentTime + 0.15);
+      } catch (e) {
+        console.warn("AudioContext blocked or not supported", e);
+      }
+    }
+
+    function onScanSuccess(decodedText, decodedResult) {
+      var nis = decodedText.trim();
+      var now = Date.now();
+      
+      // Debounce: prevent duplicate scan of the same student within 3 seconds
+      if (nis === lastScannedNis && (now - lastScanTime) < 3000) {
+        return;
+      }
+      
+      lastScannedNis = nis;
+      lastScanTime = now;
+      
+      playBeep();
+      
+      // Post data back to parent page (Google Apps Script)
+      if (window.opener) {
+        window.opener.postMessage({ type: "qr-scan", nis: nis }, "*");
+        addLog(nis, "Terkirim");
+      } else {
+        addLog(nis, "Gagal (Halaman utama tertutup)");
+      }
+    }
+
+    function addLog(nis, status) {
+      var logContent = document.getElementById("log-content");
+      if (logContent && logContent.textContent.includes("Belum ada")) {
+        document.getElementById("result-log").innerHTML = '<div class="log-title">Riwayat Scan</div><div id="log-content"></div>';
+        logContent = document.getElementById("log-content");
+      }
+      
+      var now = new Date();
+      var timeStr = now.toLocaleTimeString('id-ID', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      var item = document.createElement("div");
+      item.className = "log-item";
+      item.innerHTML = '<span>NIS: <b>' + nis + '</b></span> <span class="log-success">' + status + ' (' + timeStr + ')</span>';
+      logContent.insertBefore(item, logContent.firstChild);
+    }
+
+    function onScanFailure(error) {
+      // Quiet fail to avoid flooding console during camera frame searches
+    }
+
+    // Initialize Html5QrcodeScanner
+    var html5QrcodeScanner = new Html5QrcodeScanner(
+      "reader", 
+      { fps: 15, qrbox: { width: 220, height: 220 } },
+      /* verbose= */ false
+    );
+    html5QrcodeScanner.render(onScanSuccess, onScanFailure);
+  </script>
+</body>
+</html>
 
